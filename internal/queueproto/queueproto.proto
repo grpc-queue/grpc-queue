@@ -17,7 +17,7 @@ message DetailStreamMessage{
 }
 message DetailStreamResponseMessage{
   string streamName = 1;
-  string partitionsCount =2;
+  int32 partitionsCount =2;
 }
 
 message EnqueueMessage{
