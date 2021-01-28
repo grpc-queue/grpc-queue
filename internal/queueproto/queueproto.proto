@@ -5,6 +5,42 @@ message Message {
   string body = 1;
 }
 
+message ResponseMessage{
+  int32 errors = 1;
+}
+message CreateStreamMessage{
+  string streamName = 1;
+  int32 partitionsCount = 2;
+}
+message DetailStreamMessage{
+  string streamName = 1;
+}
+message DetailStreamResponseMessage{
+  string streamName = 1;
+  string partitionsCount =2;
+}
+
+message EnqueueMessage{
+  string streamName = 1;
+  int32 patition =2;
+  string payload = 3;
+}
+
+message DequeueMessage{
+  string streamName = 1;
+  int32 patition =2;
+}
+message DequeueResponseMessage{
+  string payload = 1;
+}
+
 service QueueService {
   rpc SayHello(Message) returns (Message) {}
+  rpc CreateStream(CreateStreamMessage) returns (ResponseMessage){}
+  rpc DetailStream(DetailStreamMessage)returns (DetailStreamResponseMessage){}
+  rpc Enqueue(EnqueueMessage) returns (ResponseMessage){}
+  rpc Dequeue(DequeueMessage) returns (DequeueResponseMessage){}
 }
+
+
+
