@@ -1,0 +1,70 @@
+syntax = "proto3";
+package queue;
+
+option go_package = "pkg/grpc/v1/queue";
+
+message Error {
+  int32 code = 1;
+  string reason = 2;
+}
+
+message Stream {
+  string name = 1;
+  int32 partition = 2;
+}
+
+message Streams {
+  repeated Stream streams = 1;
+}
+
+message CreateStreamRequest {
+  string name = 1;
+  int32 partitionCount =2;
+}
+
+message CreateStreamResponse {
+  Error errors = 1;
+}
+
+message GetStreamsRequest{
+  Stream stream = 1;
+  repeated int32 partitions = 2;
+}
+
+message GetStreamsResponse{
+  oneof message {
+    Streams streams = 1;
+    Error error = 2;
+  }
+}
+
+message Item {
+  bytes payload = 1;
+}
+
+message PushItemRequest {
+  Stream stream = 1;
+  Item item = 2;
+}
+
+message PushItemResponse {
+  Error error = 1;
+}
+
+message PopItemRequest{
+  Stream stream = 1;
+}
+
+message PopItemResponse{
+  oneof message {
+    Item item = 1;
+    Error error = 2;
+  }
+}
+
+service QueueService {
+  rpc CreateStream(CreateStreamRequest) returns (CreateStreamResponse){}
+  rpc GetStreams(GetStreamsRequest)returns (GetStreamsResponse){}
+  rpc Push(PushItemRequest) returns (PushItemResponse){}
+  rpc Pop(PopItemRequest) returns (PopItemResponse){}
+}
