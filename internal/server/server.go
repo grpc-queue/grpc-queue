@@ -21,6 +21,6 @@ func (s *Server) GetStreams(ctx context.Context, request *queue.GetStreamsReques
 func (s *Server) Push(ctx context.Context, request *queue.PushItemRequest) (*queue.PushItemResponse, error) {
 	return nil, errors.New("Push not implemented yet")
 }
-func (s *Server) Pop(ctx context.Context, request *queue.PopItemRequest) (*queue.PopItemResponse, error) {
-	return nil, errors.New("Pop not implemented yet")
+func (s *Server) Pop(request *queue.PopItemRequest, service queue.QueueService_PopServer) error {
+	return errors.New("Pop not implemented yet")
 }

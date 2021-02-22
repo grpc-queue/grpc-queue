@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 
 	"github.com/grpc-queue/grpc-queue/pkg/grpc/v1/queue"
@@ -47,12 +48,24 @@ func (c *client) Push(ctx context.Context, req *queue.PushItemRequest) (resp *qu
 	log.Printf("Response from server: %+v", response)
 	return response, nil
 }
-func (c *client) Pop(ctx context.Context, req *queue.PopItemRequest) (resp *queue.PopItemResponse, err error) {
+
+func (c *client) Pop(ctx context.Context, req *queue.PopItemRequest, processFn func(*queue.PopItemResponse)) error {
 	service := queue.NewQueueServiceClient(c.conn)
-	response, err := service.Pop(ctx, req)
+	re, err := service.Pop(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", "Error when calling Pop", err)
+		return fmt.Errorf("%s: %w", "Error when calling Pop", err)
 	}
-	log.Printf("Response from server: %+v", response)
-	return response, nil
+
+	for {
+		item, err := re.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Println(fmt.Errorf("%s: %w", "something went wrong on the pop stream", err))
+			return err
+		}
+		processFn(item)
+	}
+	return nil
 }

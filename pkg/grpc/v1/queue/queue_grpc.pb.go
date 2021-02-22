@@ -21,7 +21,7 @@ type QueueServiceClient interface {
 	CreateStream(ctx context.Context, in *CreateStreamRequest, opts ...grpc.CallOption) (*CreateStreamResponse, error)
 	GetStreams(ctx context.Context, in *GetStreamsRequest, opts ...grpc.CallOption) (*GetStreamsResponse, error)
 	Push(ctx context.Context, in *PushItemRequest, opts ...grpc.CallOption) (*PushItemResponse, error)
-	Pop(ctx context.Context, in *PopItemRequest, opts ...grpc.CallOption) (*PopItemResponse, error)
+	Pop(ctx context.Context, in *PopItemRequest, opts ...grpc.CallOption) (QueueService_PopClient, error)
 }
 
 type queueServiceClient struct {
@@ -59,13 +59,36 @@ func (c *queueServiceClient) Push(ctx context.Context, in *PushItemRequest, opts
 	return out, nil
 }
 
-func (c *queueServiceClient) Pop(ctx context.Context, in *PopItemRequest, opts ...grpc.CallOption) (*PopItemResponse, error) {
-	out := new(PopItemResponse)
-	err := c.cc.Invoke(ctx, "/queue.QueueService/Pop", in, out, opts...)
+func (c *queueServiceClient) Pop(ctx context.Context, in *PopItemRequest, opts ...grpc.CallOption) (QueueService_PopClient, error) {
+	stream, err := c.cc.NewStream(ctx, &QueueService_ServiceDesc.Streams[0], "/queue.QueueService/Pop", opts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &queueServicePopClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type QueueService_PopClient interface {
+	Recv() (*PopItemResponse, error)
+	grpc.ClientStream
+}
+
+type queueServicePopClient struct {
+	grpc.ClientStream
+}
+
+func (x *queueServicePopClient) Recv() (*PopItemResponse, error) {
+	m := new(PopItemResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // QueueServiceServer is the server API for QueueService service.
@@ -75,7 +98,7 @@ type QueueServiceServer interface {
 	CreateStream(context.Context, *CreateStreamRequest) (*CreateStreamResponse, error)
 	GetStreams(context.Context, *GetStreamsRequest) (*GetStreamsResponse, error)
 	Push(context.Context, *PushItemRequest) (*PushItemResponse, error)
-	Pop(context.Context, *PopItemRequest) (*PopItemResponse, error)
+	Pop(*PopItemRequest, QueueService_PopServer) error
 	mustEmbedUnimplementedQueueServiceServer()
 }
 
@@ -92,8 +115,8 @@ func (UnimplementedQueueServiceServer) GetStreams(context.Context, *GetStreamsRe
 func (UnimplementedQueueServiceServer) Push(context.Context, *PushItemRequest) (*PushItemResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Push not implemented")
 }
-func (UnimplementedQueueServiceServer) Pop(context.Context, *PopItemRequest) (*PopItemResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Pop not implemented")
+func (UnimplementedQueueServiceServer) Pop(*PopItemRequest, QueueService_PopServer) error {
+	return status.Errorf(codes.Unimplemented, "method Pop not implemented")
 }
 func (UnimplementedQueueServiceServer) mustEmbedUnimplementedQueueServiceServer() {}
 
@@ -162,22 +185,25 @@ func _QueueService_Push_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_Pop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PopItemRequest)
-	if err := dec(in); err != nil {
-		return nil, err
+func _QueueService_Pop_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(PopItemRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
 	}
-	if interceptor == nil {
-		return srv.(QueueServiceServer).Pop(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/queue.QueueService/Pop",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(QueueServiceServer).Pop(ctx, req.(*PopItemRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+	return srv.(QueueServiceServer).Pop(m, &queueServicePopServer{stream})
+}
+
+type QueueService_PopServer interface {
+	Send(*PopItemResponse) error
+	grpc.ServerStream
+}
+
+type queueServicePopServer struct {
+	grpc.ServerStream
+}
+
+func (x *queueServicePopServer) Send(m *PopItemResponse) error {
+	return x.ServerStream.SendMsg(m)
 }
 
 // QueueService_ServiceDesc is the grpc.ServiceDesc for QueueService service.
@@ -199,11 +225,13 @@ var QueueService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Push",
 			Handler:    _QueueService_Push_Handler,
 		},
+	},
+	Streams: []grpc.StreamDesc{
 		{
-			MethodName: "Pop",
-			Handler:    _QueueService_Pop_Handler,
+			StreamName:    "Pop",
+			Handler:       _QueueService_Pop_Handler,
+			ServerStreams: true,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
 	Metadata: "api/proto/v1/queue.proto",
 }

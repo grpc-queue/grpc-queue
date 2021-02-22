@@ -53,6 +53,7 @@ message PushItemResponse {
 
 message PopItemRequest{
   Stream stream = 1;
+  int32 quantity =2;
 }
 
 message PopItemResponse{
@@ -66,5 +67,5 @@ service QueueService {
   rpc CreateStream(CreateStreamRequest) returns (CreateStreamResponse){}
   rpc GetStreams(GetStreamsRequest)returns (GetStreamsResponse){}
   rpc Push(PushItemRequest) returns (PushItemResponse){}
-  rpc Pop(PopItemRequest) returns (PopItemResponse){}
+  rpc Pop(PopItemRequest) returns (stream PopItemResponse){}
 }
