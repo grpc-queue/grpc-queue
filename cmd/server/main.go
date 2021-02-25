@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net"
+	"os"
 	"strconv"
 
 	"github.com/grpc-queue/grpc-queue/internal/server"
@@ -24,7 +25,7 @@ func main() {
 
 	grpcServer := grpc.NewServer()
 	reflection.Register(grpcServer)
-	queue.RegisterQueueServiceServer(grpcServer, &server.Server{})
+	queue.RegisterQueueServiceServer(grpcServer, server.NewServer(os.Getenv("GRPCQUEUE_DATA_PATH")))
 
 	log.Printf("grpc server started listening on port %d", port)
 
