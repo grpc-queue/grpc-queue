@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -19,7 +20,7 @@ import (
 
 const (
 	maxMessageBytes                = 4
-	maxEntriesPerLogFile           = 10
+	maxEntriesPerLogFile           = 2
 	headPositionPaylod             = "{consume-group}|{logFile}|{byteoffset}"
 	patitionInfoPayload            = "{lastLog}|{entryCount}"
 	streamInfoPayload              = "{partitionCount}"
@@ -43,7 +44,7 @@ type server struct {
 type headPosition struct {
 	consumerGroup string
 	logFile       string
-	offset        int
+	offset        int64
 }
 
 type partitionInfo struct {
@@ -146,7 +147,7 @@ func (s *server) writeEntry(streamName string, message []byte, partition int, p 
 	}
 	defer file.Close()
 	var buffer bytes.Buffer
-	lengthMessage := len(message)
+	lengthMessage := len(message) + 1 //len of message plus \n
 	b := make([]byte, maxMessageBytes)
 	binary.LittleEndian.PutUint32(b, uint32(lengthMessage))
 	buffer.Write(b)
@@ -164,7 +165,7 @@ func (s *server) saveHeadPostion(streamName string, partition int, h *headPositi
 	defer file.Close()
 	payloadReplacer := strings.NewReplacer("{consume-group}", h.consumerGroup,
 		"{logFile}", h.logFile,
-		"{byteoffset}", strconv.Itoa(h.offset))
+		"{byteoffset}", strconv.Itoa(int(h.offset)))
 	data := payloadReplacer.Replace(headPositionPaylod)
 	err = ioutil.WriteFile(buildPath(s.baseDataPath, streamHeadPositionLocation, replacer), []byte(data), 0644)
 	if err != nil {
@@ -205,37 +206,11 @@ func (s *server) getHeadPostion(consumerGroup, streamName string, partition int)
 		groups := re.FindStringSubmatch(scanner.Text())
 		if groups[1] == consumerGroup {
 			offset, _ := strconv.Atoi(groups[3])
-			return &headPosition{consumerGroup: groups[1], logFile: groups[2], offset: offset}, nil
+			return &headPosition{consumerGroup: groups[1], logFile: groups[2], offset: int64(offset)}, nil
 		}
 
 	}
 	return nil, errors.New("Head position not found")
-}
-
-func (s *server) readEntry(streamName string, paritionNumber int, h *headPosition) (*string, error) {
-	logLocationReplacer := strings.NewReplacer("{streamName}", streamName,
-		"{partition}", strconv.Itoa(paritionNumber),
-		"{logFile}", h.logFile)
-	location := buildPath(s.baseDataPath, streamParttionLogEntryLocation, logLocationReplacer)
-	file, err := os.Open(location)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-
-	i := 0
-	for scanner.Scan() {
-		if i == h.offset {
-			bytes := scanner.Bytes()
-			message := string(bytes[maxMessageBytes:])
-			return &message, nil
-		}
-		i++
-	}
-	return nil, errors.New("partition empty")
-
 }
 
 func (s *server) CreateStream(ctx context.Context, request *queue.CreateStreamRequest) (*queue.CreateStreamResponse, error) {
@@ -306,18 +281,84 @@ func (s *server) Push(ctx context.Context, request *queue.PushItemRequest) (*que
 	s.writeEntry(request.Stream.Name, request.Item.Payload, partitionNumber, p)
 	return &queue.PushItemResponse{}, nil
 }
-func (s *server) Pop(request *queue.PopItemRequest, service queue.QueueService_PopServer) error {
-	currentHead, _ := s.getHeadPostion("main", request.Stream.Name, int(request.Stream.Partition)-1)
-	message, err := s.readEntry(request.Stream.Name, int(request.Stream.Partition)-1, currentHead)
-	if err != nil {
-		return err
-	}
 
-	err = s.ack(request.Stream.Name, int(request.Stream.Partition)-1, currentHead)
-	if err != nil {
-		return err
+func (s *server) Pop(request *queue.PopItemRequest, service queue.QueueService_PopServer) error {
+
+	partition := int(request.Stream.Partition) - 1
+	currentHead, _ := s.getHeadPostion("main", request.Stream.Name, partition)
+
+	totalRead := 0
+	callBack := func(bytes []byte) {
+		totalRead++
+		service.Send(&queue.PopItemResponse{Message: &queue.PopItemResponse_Item{&queue.Item{Payload: bytes}}})
 	}
-	service.Send(&queue.PopItemResponse{Message: &queue.PopItemResponse_Item{&queue.Item{Payload: []byte(*message)}}})
+	currentFile := currentHead.logFile
+	currentOffset := currentHead.offset
+
+	for {
+		replacer := strings.NewReplacer("{streamName}", request.Stream.Name,
+			"{partition}", strconv.Itoa(partition),
+			"{logFile}", currentFile)
+		file, err := os.Open(buildPath(s.baseDataPath, streamParttionLogEntryLocation, replacer))
+
+		if err != nil {
+			return err
+		}
+
+		nextOffset, err := fetch(currentOffset, int(request.Quantity), file, callBack)
+
+		if totalRead == int(request.Quantity) || err != io.EOF {
+			currentOffset = nextOffset
+			break
+		}
+
+		if err == io.EOF {
+			candidateFile := incrementFilePath(currentFile)
+			candidateOffset := int64(0)
+
+			replacerCandidate := strings.NewReplacer("{streamName}", request.Stream.Name,
+				"{partition}", strconv.Itoa(partition),
+				"{logFile}", candidateFile)
+
+			if _, err := os.Stat(buildPath(s.baseDataPath, streamParttionLogEntryLocation, replacerCandidate)); os.IsNotExist(err) {
+				file.Close()
+				return io.EOF
+			} else {
+				currentFile = candidateFile
+				currentOffset = candidateOffset
+			}
+		}
+
+		file.Close()
+	}
+	currentHead.logFile = currentFile
+	currentHead.offset = currentOffset
+	s.saveHeadPostion(request.Stream.Name, partition, currentHead)
 
 	return nil
+}
+
+func incrementFilePath(path string) string {
+	n, _ := strconv.Atoi(strings.Split(path, ".log")[0])
+	n++
+	return strconv.Itoa(n) + ".log"
+}
+
+func fetch(offset int64, limit int, reader io.ReadSeeker, callBack func([]byte)) (currentOffset int64, e error) {
+	reader.Seek(offset, io.SeekStart)
+	var currentPosition int64
+	for i := 0; i < limit; i++ {
+		headerContentBuffer := make([]byte, 4)
+		_, err := reader.Read(headerContentBuffer)
+		if err != nil {
+			return currentPosition, err
+		}
+		sizePayloadBuf := int(binary.LittleEndian.Uint32(headerContentBuffer))
+		payloadBuffer := make([]byte, sizePayloadBuf)
+		reader.Read(payloadBuffer)
+		callBack(payloadBuffer)
+		currentPosition, _ = reader.Seek(0, io.SeekCurrent)
+	}
+
+	return currentPosition, nil
 }
