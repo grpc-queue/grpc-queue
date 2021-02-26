@@ -15,29 +15,24 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/grpc-queue/grpc-queue/internal/location"
 	"github.com/grpc-queue/grpc-queue/pkg/grpc/v1/queue"
 )
 
 const (
-	maxMessageBytes                = 4
-	maxEntriesPerLogFile           = 2
-	headPositionPaylod             = "{consume-group}|{logFile}|{byteoffset}"
-	patitionInfoPayload            = "{lastLog}|{entryCount}"
-	streamInfoPayload              = "{partitionCount}"
-	positionPattern                = `(\w+)\|(\d+\.log)\|(\d+)`
-	partitionInfoPattern           = `(\d+\.log)\|(\d+)`
-	streamsLocation                = "/queuedata/streams"
-	streamLocation                 = "/queuedata/streams/{streamName}"
-	streamInfoLocation             = "/queuedata/streams/{streamName}/stream.info"
-	streamPartitionLocation        = "/queuedata/streams/{streamName}/partition{partition}"
-	streamPartitionInfoLocation    = "/queuedata/streams/{streamName}/partition{partition}/partition.info"
-	streamParttionLogEntryLocation = "/queuedata/streams/{streamName}/partition{partition}/{logFile}"
-	streamHeadPositionLocation     = "/queuedata/streams/{streamName}/partition{partition}/head.position"
+	maxMessageBytes      = 4
+	maxEntriesPerLogFile = 2
+	headPositionPaylod   = "{consume-group}|{logFile}|{byteoffset}"
+	patitionInfoPayload  = "{lastLog}|{entryCount}"
+	streamInfoPayload    = "{partitionCount}"
+	positionPattern      = `(\w+)\|(\d+\.log)\|(\d+)`
+	partitionInfoPattern = `(\d+\.log)\|(\d+)`
+	consumerGroup        = "main"
 )
 
 type server struct {
 	streamsMutex map[string]*sync.Mutex
-	baseDataPath string
+	location     *location.Location
 	*queue.UnimplementedQueueServiceServer
 }
 
@@ -53,9 +48,9 @@ type partitionInfo struct {
 }
 
 func NewServer(dataPath string) *server {
-	location := buildPath(dataPath, streamsLocation, nil)
-	os.MkdirAll(location, os.ModePerm)
-	files, err := ioutil.ReadDir(location)
+	location := location.NewLocation(dataPath)
+	os.MkdirAll(location.StreamsFolder(), os.ModePerm)
+	files, err := ioutil.ReadDir(location.StreamsFolder())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -66,18 +61,11 @@ func NewServer(dataPath string) *server {
 			streams[f.Name()] = &sync.Mutex{}
 		}
 	}
-	return &server{streamsMutex: streams, baseDataPath: strings.TrimRight(dataPath, "/")}
+	return &server{streamsMutex: streams, location: location}
 }
 
-func buildPath(basePath, resource string, replacer *strings.Replacer) string {
-	if replacer != nil {
-		return basePath + replacer.Replace(resource)
-	}
-	return basePath + resource
-}
 func (s *server) savePartitionInfo(streamName string, partition int, p *partitionInfo) {
-	replacer := strings.NewReplacer("{streamName}", streamName, "{partition}", strconv.Itoa(partition))
-	file, err := os.OpenFile(buildPath(s.baseDataPath, streamPartitionInfoLocation, replacer), os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(s.location.StreamPartitionInfoFile(streamName, partition), os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -90,11 +78,10 @@ func (s *server) savePartitionInfo(streamName string, partition int, p *partitio
 }
 
 func (s *server) getStreamPartitionSize(streamName string) (int, error) {
-	replacer := strings.NewReplacer("{streamName}", streamName)
-	file, err := os.Open(buildPath(s.baseDataPath, streamInfoLocation, replacer))
+
+	file, err := os.Open(s.location.StreamInfoFile(streamName))
 	if err != nil {
-		log.Fatal(err)
-		return 0, errors.New("no partition found")
+		return 0, errors.New("combination of stream and partition not found")
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
@@ -104,8 +91,7 @@ func (s *server) getStreamPartitionSize(streamName string) (int, error) {
 
 }
 func (s *server) getPartitionInfo(streamName string, partition int) *partitionInfo {
-	replacer := strings.NewReplacer("{streamName}", streamName, "{partition}", strconv.Itoa(partition))
-	file, err := os.Open(buildPath(s.baseDataPath, streamPartitionInfoLocation, replacer))
+	file, err := os.Open(s.location.StreamPartitionInfoFile(streamName, partition))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -136,11 +122,8 @@ func (s *server) updatePartitionInfo(partition, amount int, streamName string) *
 	return p
 }
 func (s *server) writeEntry(streamName string, message []byte, partition int, p *partitionInfo) {
-	replacer := strings.NewReplacer("{streamName}", streamName,
-		"{partition}", strconv.Itoa(partition),
-		"{logFile}", p.lastLog)
 
-	location := buildPath(s.baseDataPath, streamParttionLogEntryLocation, replacer)
+	location := s.location.StreamParttionLogEntryFile(streamName, p.lastLog, partition)
 	file, err := os.OpenFile(location, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		log.Println(err)
@@ -157,8 +140,8 @@ func (s *server) writeEntry(streamName string, message []byte, partition int, p 
 
 }
 func (s *server) saveHeadPostion(streamName string, partition int, h *headPosition) {
-	replacer := strings.NewReplacer("{streamName}", streamName, "{partition}", strconv.Itoa(partition))
-	file, err := os.Open(buildPath(s.baseDataPath, streamHeadPositionLocation, replacer))
+	location := s.location.StreamHeadPositionFile(streamName, partition)
+	file, err := os.Open(location)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -167,37 +150,16 @@ func (s *server) saveHeadPostion(streamName string, partition int, h *headPositi
 		"{logFile}", h.logFile,
 		"{byteoffset}", strconv.Itoa(int(h.offset)))
 	data := payloadReplacer.Replace(headPositionPaylod)
-	err = ioutil.WriteFile(buildPath(s.baseDataPath, streamHeadPositionLocation, replacer), []byte(data), 0644)
+	err = ioutil.WriteFile(location, []byte(data), 0644)
 	if err != nil {
 		log.Fatalln(err)
 	}
 }
-func (s *server) ack(streamName string, paritionNumber int, currentHead *headPosition) error {
-	futureHead := &headPosition{consumerGroup: currentHead.consumerGroup, logFile: currentHead.logFile, offset: currentHead.offset}
-	p := s.getPartitionInfo(streamName, paritionNumber)
-	if futureHead.offset+1 == maxEntriesPerLogFile {
-		lastI, _ := strconv.Atoi(strings.Split(p.lastLog, ".")[0])
-
-		currentI, _ := strconv.Atoi(strings.Split(futureHead.logFile, ".")[0])
-
-		if currentI == lastI {
-			return errors.New("queue is empty")
-		}
-
-		currentI++
-		futureHead.logFile = strconv.Itoa(currentI) + ".log"
-		futureHead.offset = 0
-	} else {
-		futureHead.offset++
-	}
-	s.saveHeadPostion(streamName, paritionNumber, futureHead)
-	return nil
-}
 func (s *server) getHeadPostion(consumerGroup, streamName string, partition int) (*headPosition, error) {
-	replacer := strings.NewReplacer("{streamName}", streamName, "{partition}", strconv.Itoa(partition))
-	file, err := os.Open(buildPath(s.baseDataPath, streamHeadPositionLocation, replacer))
+	location := s.location.StreamHeadPositionFile(streamName, partition)
+	file, err := os.Open(location)
 	if err != nil {
-		log.Fatal(err)
+		return nil, errors.New("Head position not found")
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
@@ -214,33 +176,29 @@ func (s *server) getHeadPostion(consumerGroup, streamName string, partition int)
 }
 
 func (s *server) CreateStream(ctx context.Context, request *queue.CreateStreamRequest) (*queue.CreateStreamResponse, error) {
-
-	streamLocationReplacer := strings.NewReplacer("{streamName}", request.Name)
-	location := buildPath(s.baseDataPath, streamLocation, streamLocationReplacer)
+	location := s.location.StreamLocationFolder(request.Name)
 	if _, err := os.Stat(location); !os.IsNotExist(err) {
 		return nil, errors.New("stream already exists")
 	}
 	os.Mkdir(location, os.ModePerm)
 
-	err := ioutil.WriteFile(buildPath(s.baseDataPath, streamInfoLocation, streamLocationReplacer), []byte(strings.Replace(streamInfoPayload, "{partitionCount}", strconv.Itoa(int(request.PartitionCount)), 1)), 0644)
+	err := ioutil.WriteFile(s.location.StreamInfoFile(request.Name), []byte(strings.Replace(streamInfoPayload, "{partitionCount}", strconv.Itoa(int(request.PartitionCount)), 1)), 0644)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("%s: %w", "Error sabing streamInfo", err)
 	}
 
 	for i := 0; i < int(request.PartitionCount); i++ {
-		replacer := strings.NewReplacer("{streamName}", request.Name, "{partition}", strconv.Itoa(i))
-		os.Mkdir(buildPath(s.baseDataPath, streamPartitionLocation, replacer), os.ModePerm)
-		payloadReplacer := strings.NewReplacer("{consume-group}", "main",
+		l := s.location.StreamPartitionFolder(request.Name, i)
+		os.Mkdir(l, os.ModePerm)
+		payloadReplacer := strings.NewReplacer("{consume-group}", consumerGroup,
 			"{logFile}", "0.log",
 			"{entriesCounter}", "0",
 			"{byteoffset}", "0")
 		data := payloadReplacer.Replace(headPositionPaylod)
 
-		headPositionLocationReplacer := strings.NewReplacer("{streamName}", request.Name, "{partition}", strconv.Itoa(i))
-
-		err := ioutil.WriteFile(buildPath(s.baseDataPath, streamHeadPositionLocation, headPositionLocationReplacer), []byte(data), 0644)
+		err := ioutil.WriteFile(s.location.StreamHeadPositionFile(request.Name, i), []byte(data), 0644)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("%s: %w", "Error saving StreamHeadPosition", err)
 		}
 
 		s.savePartitionInfo(request.Name, i, &partitionInfo{lastLog: "0.log", EntryCount: 0})
@@ -285,7 +243,10 @@ func (s *server) Push(ctx context.Context, request *queue.PushItemRequest) (*que
 func (s *server) Pop(request *queue.PopItemRequest, service queue.QueueService_PopServer) error {
 
 	partition := int(request.Stream.Partition) - 1
-	currentHead, _ := s.getHeadPostion("main", request.Stream.Name, partition)
+	currentHead, err := s.getHeadPostion(consumerGroup, request.Stream.Name, partition)
+	if err != nil {
+		return errors.New("Combination of stream and partition not found")
+	}
 
 	totalRead := 0
 	callBack := func(bytes []byte) {
@@ -296,11 +257,9 @@ func (s *server) Pop(request *queue.PopItemRequest, service queue.QueueService_P
 	currentOffset := currentHead.offset
 
 	for {
-		replacer := strings.NewReplacer("{streamName}", request.Stream.Name,
-			"{partition}", strconv.Itoa(partition),
-			"{logFile}", currentFile)
-		file, err := os.Open(buildPath(s.baseDataPath, streamParttionLogEntryLocation, replacer))
 
+		l := s.location.StreamParttionLogEntryFile(request.Stream.Name, currentFile, partition)
+		file, err := os.Open(l)
 		if err != nil {
 			return err
 		}
@@ -316,11 +275,9 @@ func (s *server) Pop(request *queue.PopItemRequest, service queue.QueueService_P
 			candidateFile := incrementFilePath(currentFile)
 			candidateOffset := int64(0)
 
-			replacerCandidate := strings.NewReplacer("{streamName}", request.Stream.Name,
-				"{partition}", strconv.Itoa(partition),
-				"{logFile}", candidateFile)
+			candidateLocation := s.location.StreamParttionLogEntryFile(request.Stream.Name, candidateFile, partition)
 
-			if _, err := os.Stat(buildPath(s.baseDataPath, streamParttionLogEntryLocation, replacerCandidate)); os.IsNotExist(err) {
+			if _, err := os.Stat(candidateLocation); os.IsNotExist(err) {
 				file.Close()
 				return io.EOF
 			} else {
