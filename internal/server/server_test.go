@@ -20,7 +20,7 @@ func TestFetch(t *testing.T) {
 			str := "test" + strconv.Itoa(i) + "\n"
 			message := []byte(str)
 			lengthMessage := len(message)
-			b := make([]byte, maxMessageBytes)
+			b := make([]byte, headerMessageLength)
 			binary.LittleEndian.PutUint32(b, uint32(lengthMessage))
 			buffer.Write(b)
 			buffer.Write(message)
@@ -49,7 +49,7 @@ func TestFetch(t *testing.T) {
 		for _, p := range payloads {
 			message := []byte(p + "\n")
 			lengthMessage := len(message)
-			b := make([]byte, maxMessageBytes)
+			b := make([]byte, headerMessageLength)
 			binary.LittleEndian.PutUint32(b, uint32(lengthMessage))
 			buffer.Write(b)
 			buffer.Write(message)
@@ -89,7 +89,7 @@ func TestFetch(t *testing.T) {
 		for _, p := range payloads {
 			message := []byte(p + "\n")
 			lengthMessage := len(message)
-			b := make([]byte, maxMessageBytes)
+			b := make([]byte, headerMessageLength)
 			binary.LittleEndian.PutUint32(b, uint32(lengthMessage))
 			buffer.Write(b)
 			buffer.Write(message)
@@ -130,7 +130,7 @@ func TestFetch(t *testing.T) {
 		for _, p := range payloads {
 			message := []byte(p + "\n")
 			lengthMessage := len(message)
-			b := make([]byte, maxMessageBytes)
+			b := make([]byte, headerMessageLength)
 			binary.LittleEndian.PutUint32(b, uint32(lengthMessage))
 			buffer.Write(b)
 			buffer.Write(message)

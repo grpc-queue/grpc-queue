@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	maxMessageBytes      = 4
+	headerMessageLength  = 4
 	maxEntriesPerLogFile = 2
 	headPositionPaylod   = "{consume-group}|{logFile}|{byteoffset}"
 	patitionInfoPayload  = "{lastLog}|{entryCount}"
@@ -131,7 +131,7 @@ func (s *server) writeEntry(streamName string, message []byte, partition int, p 
 	defer file.Close()
 	var buffer bytes.Buffer
 	lengthMessage := len(message) + 1 //len of message plus \n
-	b := make([]byte, maxMessageBytes)
+	b := make([]byte, headerMessageLength)
 	binary.LittleEndian.PutUint32(b, uint32(lengthMessage))
 	buffer.Write(b)
 	buffer.Write(message)
@@ -184,7 +184,7 @@ func (s *server) CreateStream(ctx context.Context, request *queue.CreateStreamRe
 
 	err := ioutil.WriteFile(s.location.StreamInfoFile(request.Name), []byte(strings.Replace(streamInfoPayload, "{partitionCount}", strconv.Itoa(int(request.PartitionCount)), 1)), 0644)
 	if err != nil {
-		log.Fatalf("%s: %w", "Error sabing streamInfo", err)
+		log.Fatalf("%s: %s", "Error sabing streamInfo", err.Error())
 	}
 
 	for i := 0; i < int(request.PartitionCount); i++ {
@@ -198,7 +198,7 @@ func (s *server) CreateStream(ctx context.Context, request *queue.CreateStreamRe
 
 		err := ioutil.WriteFile(s.location.StreamHeadPositionFile(request.Name, i), []byte(data), 0644)
 		if err != nil {
-			log.Fatalf("%s: %w", "Error saving StreamHeadPosition", err)
+			log.Fatalf("%s: %s", "Error saving StreamHeadPosition", err.Error())
 		}
 
 		s.savePartitionInfo(request.Name, i, &partitionInfo{lastLog: "0.log", EntryCount: 0})
@@ -305,7 +305,7 @@ func fetch(offset int64, limit int, reader io.ReadSeeker, callBack func([]byte))
 	reader.Seek(offset, io.SeekStart)
 	var currentPosition int64
 	for i := 0; i < limit; i++ {
-		headerContentBuffer := make([]byte, 4)
+		headerContentBuffer := make([]byte, headerMessageLength)
 		_, err := reader.Read(headerContentBuffer)
 		if err != nil {
 			return currentPosition, err
