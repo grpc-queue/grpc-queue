@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/grpc-queue/grpc-queue/internal/location"
 	"github.com/grpc-queue/grpc-queue/pkg/grpc/v1/queue"
@@ -31,9 +33,14 @@ const (
 )
 
 type server struct {
-	streamsMutex map[string]*sync.Mutex
+	streamsMutex map[string][]partition
 	location     *location.Location
 	*queue.UnimplementedQueueServiceServer
+}
+
+type partition struct {
+	pushMutex sync.Mutex
+	popMutex  sync.Mutex
 }
 
 type headPosition struct {
@@ -55,13 +62,21 @@ func NewServer(dataPath string) *server {
 		log.Fatal(err)
 	}
 
-	streams := make(map[string]*sync.Mutex)
+	s := &server{location: location}
+	streams := make(map[string][]partition)
 	for _, f := range files {
 		if !strings.HasSuffix(f.Name(), ".info") {
-			streams[f.Name()] = &sync.Mutex{}
+			partitions := make([]partition, 0)
+			partitionsCount, _ := s.getStreamPartitionSize(f.Name())
+			for i := 0; i < partitionsCount; i++ {
+				partitions = append(partitions, partition{})
+			}
+			streams[f.Name()] = partitions
 		}
 	}
-	return &server{streamsMutex: streams, location: location}
+	s.streamsMutex = streams
+	return s
+
 }
 
 func (s *server) savePartitionInfo(streamName string, partition int, p *partitionInfo) {
@@ -187,6 +202,7 @@ func (s *server) CreateStream(ctx context.Context, request *queue.CreateStreamRe
 		log.Fatalf("%s: %s", "Error sabing streamInfo", err.Error())
 	}
 
+	partitions := make([]partition, 0)
 	for i := 0; i < int(request.PartitionCount); i++ {
 		l := s.location.StreamPartitionFolder(request.Name, i)
 		os.Mkdir(l, os.ModePerm)
@@ -201,9 +217,11 @@ func (s *server) CreateStream(ctx context.Context, request *queue.CreateStreamRe
 			log.Fatalf("%s: %s", "Error saving StreamHeadPosition", err.Error())
 		}
 
+		partitions = append(partitions, partition{})
+
 		s.savePartitionInfo(request.Name, i, &partitionInfo{lastLog: "0.log", EntryCount: 0})
 	}
-	s.streamsMutex[request.Name] = &sync.Mutex{}
+	s.streamsMutex[request.Name] = partitions
 
 	return &queue.CreateStreamResponse{}, nil
 }
@@ -225,6 +243,11 @@ func (s *server) GetStreams(ctx context.Context, request *queue.GetStreamsReques
 
 func (s *server) Push(ctx context.Context, request *queue.PushItemRequest) (*queue.PushItemResponse, error) {
 	partitionNumber := int(request.Stream.Partition) - 1
+
+	fmt.Println("trying to acquire the lock")
+	s.streamsMutex[request.Stream.Name][partitionNumber].pushMutex.Lock()
+	fmt.Println("lock acquired ")
+	defer s.streamsMutex[request.Stream.Name][partitionNumber].pushMutex.Unlock()
 	partitionCount, err := s.getStreamPartitionSize(request.Stream.Name)
 	if err != nil {
 		return nil, err
@@ -232,17 +255,20 @@ func (s *server) Push(ctx context.Context, request *queue.PushItemRequest) (*que
 	if int(request.Stream.Partition)-1 > partitionCount {
 		return nil, errors.New("invalid partition")
 	}
-	s.streamsMutex[request.Stream.Name].Lock()
-	defer s.streamsMutex[request.Stream.Name].Unlock()
 
 	p := s.updatePartitionInfo(partitionNumber, 1, request.Stream.Name)
 	s.writeEntry(request.Stream.Name, request.Item.Payload, partitionNumber, p)
+
+	time.Sleep(30 * time.Minute)
 	return &queue.PushItemResponse{}, nil
 }
 
 func (s *server) Pop(request *queue.PopItemRequest, service queue.QueueService_PopServer) error {
 
 	partition := int(request.Stream.Partition) - 1
+	s.streamsMutex[request.Stream.Name][partition].popMutex.Lock()
+	defer s.streamsMutex[request.Stream.Name][partition].popMutex.Unlock()
+
 	currentHead, err := s.getHeadPostion(consumerGroup, request.Stream.Name, partition)
 	if err != nil {
 		return errors.New("Combination of stream and partition not found")
