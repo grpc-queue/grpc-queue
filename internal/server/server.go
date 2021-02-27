@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -244,9 +243,7 @@ func (s *server) GetStreams(ctx context.Context, request *queue.GetStreamsReques
 func (s *server) Push(ctx context.Context, request *queue.PushItemRequest) (*queue.PushItemResponse, error) {
 	partitionNumber := int(request.Stream.Partition) - 1
 
-	fmt.Println("trying to acquire the lock")
 	s.streamsMutex[request.Stream.Name][partitionNumber].pushMutex.Lock()
-	fmt.Println("lock acquired ")
 	defer s.streamsMutex[request.Stream.Name][partitionNumber].pushMutex.Unlock()
 	partitionCount, err := s.getStreamPartitionSize(request.Stream.Name)
 	if err != nil {
