@@ -38,7 +38,7 @@ example: `1.log|2`
 example: `main|0.log|6`
 
 TODO:
-* figure out how streams is supposed to work
+* figure out how gestreams is supposed to work
 * figure out how and when to perform logfiles cleanup
 * figure out if we will support consummer_group id's
 
