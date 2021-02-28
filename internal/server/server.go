@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/grpc-queue/grpc-queue/internal/location"
 	"github.com/grpc-queue/grpc-queue/pkg/grpc/v1/queue"
@@ -24,10 +23,10 @@ const (
 	headerMessageLength  = 4
 	maxEntriesPerLogFile = 2
 	headPositionPaylod   = "{consume-group}|{logFile}|{byteoffset}"
-	patitionInfoPayload  = "{lastLog}|{entryCount}"
-	streamInfoPayload    = "{partitionCount}"
-	positionPattern      = `(\w+)\|(\d+\.log)\|(\d+)`
+	headPositionPattern  = `(\w+)\|(\d+\.log)\|(\d+)`
+	partitionInfoPayload = "{lastLog}|{entryCount}"
 	partitionInfoPattern = `(\d+\.log)\|(\d+)`
+	streamInfoPayload    = "{partitionCount}"
 	consumerGroup        = "main"
 )
 
@@ -86,7 +85,7 @@ func (s *server) savePartitionInfo(streamName string, partition int, p *partitio
 	defer file.Close()
 	payloadReplacer := strings.NewReplacer("{lastLog}", p.lastLog,
 		"{entryCount}", strconv.Itoa(p.EntryCount))
-	data := payloadReplacer.Replace(patitionInfoPayload)
+	data := payloadReplacer.Replace(partitionInfoPayload)
 
 	file.Write([]byte(data))
 }
@@ -177,7 +176,7 @@ func (s *server) getHeadPostion(consumerGroup, streamName string, partition int)
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
-	re := regexp.MustCompile(positionPattern)
+	re := regexp.MustCompile(headPositionPattern)
 	for scanner.Scan() {
 		groups := re.FindStringSubmatch(scanner.Text())
 		if groups[1] == consumerGroup {
@@ -256,7 +255,6 @@ func (s *server) Push(ctx context.Context, request *queue.PushItemRequest) (*que
 	p := s.updatePartitionInfo(partitionNumber, 1, request.Stream.Name)
 	s.writeEntry(request.Stream.Name, request.Item.Payload, partitionNumber, p)
 
-	time.Sleep(30 * time.Minute)
 	return &queue.PushItemResponse{}, nil
 }
 

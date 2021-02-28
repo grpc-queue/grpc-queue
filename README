@@ -1,2 +1,0 @@
-NEW COMMAND TO UPDATE OUR PROTOBUF GENERATED FILES(context: project-root folder):
-protoc --go_out=. --go-grpc_out=. api/proto/v1/queue.proto 
