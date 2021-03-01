@@ -37,6 +37,9 @@ example: `1.log|2`
 
 example: `main|0.log|6`
 
+
+**x.log:** file to store the messages of an partition, the first 4 bytes tells how much bytes the message + \n has 
+
 TODO:
 * figure out how gestreams is supposed to work
 * figure out how and when to perform logfiles cleanup
