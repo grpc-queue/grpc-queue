@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"math"
 	"os"
 	"regexp"
 	"strconv"
@@ -22,6 +23,8 @@ import (
 const (
 	headerMessageLength  = 4
 	maxEntriesPerLogFile = 2
+	dicardBufferSize     = 1024
+	readBufferSize       = 1024
 	headPositionPaylod   = "{consume-group}|{logFile}|{byteoffset}"
 	headPositionPattern  = `(\w+)\|(\d+\.log)\|(\d+)`
 	partitionInfoPayload = "{lastLog}|{entryCount}"
@@ -284,8 +287,9 @@ func (s *server) Pop(request *queue.PopItemRequest, service queue.QueueService_P
 		if err != nil {
 			return err
 		}
+		bufferedReader := bufio.NewReaderSize(file, readBufferSize)
 
-		nextOffset, err := fetch(currentOffset, int(request.Quantity), file, callBack)
+		nextOffset, err := fetch(currentOffset, int(request.Quantity), bufferedReader, callBack)
 
 		if totalRead == int(request.Quantity) || err != io.EOF {
 			currentOffset = nextOffset
@@ -322,21 +326,58 @@ func incrementFilePath(path string) string {
 	return strconv.Itoa(n) + ".log"
 }
 
-func fetch(offset int64, limit int, reader io.ReadSeeker, callBack func([]byte)) (currentOffset int64, e error) {
-	reader.Seek(offset, io.SeekStart)
-	var currentPosition int64
+func fetch(offset int64, limit int, reader io.Reader, callBack func([]byte)) (currentOffset int64, e error) {
+	err := alternativeSeek(reader, offset)
+	if err != nil {
+		return 0, err
+	}
+	currentPosition := offset
 	for i := 0; i < limit; i++ {
 		headerContentBuffer := make([]byte, headerMessageLength)
-		_, err := reader.Read(headerContentBuffer)
+		var currentReaded int
+		currentReaded, err := reader.Read(headerContentBuffer)
 		if err != nil {
 			return currentPosition, err
 		}
 		sizePayloadBuf := int(binary.LittleEndian.Uint32(headerContentBuffer))
 		payloadBuffer := make([]byte, sizePayloadBuf)
-		reader.Read(payloadBuffer)
+		n, err := reader.Read(payloadBuffer)
+		if err != nil {
+			return currentPosition, err
+		}
+		currentReaded += n
 		callBack(payloadBuffer)
-		currentPosition, _ = reader.Seek(0, io.SeekCurrent)
+		currentPosition += int64(currentReaded)
 	}
 
 	return currentPosition, nil
+}
+
+//alternativeSeek because bufio does not implement seek
+func alternativeSeek(reader io.Reader, discard int64) error {
+	var counter int
+	for {
+		var bytes []byte
+		if (counter + dicardBufferSize) > int(discard) {
+			bytes = make([]byte, int(math.Abs(float64(counter)-float64(discard))))
+		} else if (counter + dicardBufferSize) == int(discard) {
+			bytes = make([]byte, dicardBufferSize)
+		} else {
+			bytes = make([]byte, discard-int64(counter))
+		}
+
+		n, err := reader.Read(bytes)
+		if err != nil {
+			return err
+		}
+
+		counter += n
+		if counter > int(discard) {
+			return errors.New("should not be higher ")
+		}
+		if counter == int(discard) {
+			break
+		}
+	}
+	return nil
 }
