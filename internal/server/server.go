@@ -221,6 +221,9 @@ func (s *server) CreateStream(ctx context.Context, request *queue.CreateStreamRe
 		partitions = append(partitions, partition{})
 
 		s.savePartitionInfo(request.Name, i, &partitionInfo{lastLog: "0.log", EntryCount: 0})
+
+		zeroLogFileLocation := s.location.StreamParttionLogEntryFile(request.Name, "0.log", i)
+		os.Create(zeroLogFileLocation)
 	}
 	s.streamsMutex[request.Name] = partitions
 
@@ -245,8 +248,13 @@ func (s *server) GetStreams(ctx context.Context, request *queue.GetStreamsReques
 func (s *server) Push(ctx context.Context, request *queue.PushItemRequest) (*queue.PushItemResponse, error) {
 	partitionNumber := int(request.Stream.Partition) - 1
 
-	s.streamsMutex[request.Stream.Name][partitionNumber].pushMutex.Lock()
-	defer s.streamsMutex[request.Stream.Name][partitionNumber].pushMutex.Unlock()
+	partition, err := s.retrievePartition(request.Stream.Name, partitionNumber)
+	if err != nil {
+		return nil, err
+	}
+	partition.pushMutex.Lock()
+	defer partition.pushMutex.Unlock()
+
 	partitionCount, err := s.getStreamPartitionSize(request.Stream.Name)
 	if err != nil {
 		return nil, err
@@ -263,11 +271,16 @@ func (s *server) Push(ctx context.Context, request *queue.PushItemRequest) (*que
 
 func (s *server) Pop(request *queue.PopItemRequest, service queue.QueueService_PopServer) error {
 
-	partition := int(request.Stream.Partition) - 1
-	s.streamsMutex[request.Stream.Name][partition].popMutex.Lock()
-	defer s.streamsMutex[request.Stream.Name][partition].popMutex.Unlock()
+	partitionNumber := int(request.Stream.Partition) - 1
 
-	currentHead, err := s.getHeadPostion(consumerGroup, request.Stream.Name, partition)
+	partition, err := s.retrievePartition(request.Stream.Name, partitionNumber)
+	if err != nil {
+		return err
+	}
+	partition.popMutex.Lock()
+	defer partition.popMutex.Unlock()
+
+	currentHead, err := s.getHeadPostion(consumerGroup, request.Stream.Name, partitionNumber)
 	if err != nil {
 		return errors.New("Combination of stream and partition not found")
 	}
@@ -275,14 +288,14 @@ func (s *server) Pop(request *queue.PopItemRequest, service queue.QueueService_P
 	totalRead := 0
 	callBack := func(bytes []byte) {
 		totalRead++
-		service.Send(&queue.PopItemResponse{Message: &queue.PopItemResponse_Item{&queue.Item{Payload: bytes}}})
+		service.Send(&queue.PopItemResponse{Message: &queue.PopItemResponse_Item{&queue.Item{Payload: bytes[:len(bytes)-1]}}})
 	}
 	currentFile := currentHead.logFile
 	currentOffset := currentHead.offset
 
 	for {
 
-		l := s.location.StreamParttionLogEntryFile(request.Stream.Name, currentFile, partition)
+		l := s.location.StreamParttionLogEntryFile(request.Stream.Name, currentFile, partitionNumber)
 		file, err := os.Open(l)
 		if err != nil {
 			return err
@@ -300,7 +313,7 @@ func (s *server) Pop(request *queue.PopItemRequest, service queue.QueueService_P
 			candidateFile := incrementFilePath(currentFile)
 			candidateOffset := int64(0)
 
-			candidateLocation := s.location.StreamParttionLogEntryFile(request.Stream.Name, candidateFile, partition)
+			candidateLocation := s.location.StreamParttionLogEntryFile(request.Stream.Name, candidateFile, partitionNumber)
 
 			if _, err := os.Stat(candidateLocation); os.IsNotExist(err) {
 				file.Close()
@@ -315,7 +328,7 @@ func (s *server) Pop(request *queue.PopItemRequest, service queue.QueueService_P
 	}
 	currentHead.logFile = currentFile
 	currentHead.offset = currentOffset
-	s.saveHeadPostion(request.Stream.Name, partition, currentHead)
+	s.saveHeadPostion(request.Stream.Name, partitionNumber, currentHead)
 
 	return nil
 }
@@ -351,6 +364,17 @@ func fetch(offset int64, limit int, reader io.Reader, callBack func([]byte)) (cu
 	}
 
 	return currentPosition, nil
+}
+
+func (s *server) retrievePartition(streamName string, partition int) (*partition, error) {
+	if stream, ok := s.streamsMutex[streamName]; ok {
+		if len(stream)-1 >= partition {
+			return &stream[partition], nil
+		}
+		return nil, errors.New("partition number not found")
+
+	}
+	return nil, errors.New("stream name not found")
 }
 
 //alternativeSeek because bufio does not implement seek

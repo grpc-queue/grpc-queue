@@ -2,11 +2,92 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"io"
+	"io/ioutil"
+	"os"
 	"strconv"
 	"testing"
+
+	"github.com/grpc-queue/grpc-queue/pkg/grpc/v1/queue"
+	"google.golang.org/grpc"
 )
+
+type recieverServerMock struct {
+	Data [][]byte
+	grpc.ServerStream
+}
+
+func newRecieverServerMock(data [][]byte) *recieverServerMock {
+	return &recieverServerMock{Data: data}
+}
+func (r *recieverServerMock) Send(item *queue.PopItemResponse) error {
+	r.Data = append(r.Data, item.GetItem().Payload)
+	return nil
+}
+func TestQueue(t *testing.T) {
+	dir, err := ioutil.TempDir("", "queuedata")
+	if err != nil {
+		t.Error(err)
+	}
+	defer os.RemoveAll(dir)
+
+	streamName := "test1"
+	partitions := 1
+	ctx := context.Background()
+	q := NewServer(dir)
+
+	q.CreateStream(ctx, &queue.CreateStreamRequest{Name: streamName, PartitionCount: int32(partitions)})
+	q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
+		Item: &queue.Item{Payload: []byte("payload1")}})
+	q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
+		Item: &queue.Item{Payload: []byte("payload2")}})
+	q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
+		Item: &queue.Item{Payload: []byte("payload3")}})
+	q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
+		Item: &queue.Item{Payload: []byte("payload4")}})
+
+	reciverServerMock := newRecieverServerMock(make([][]byte, 0))
+	q.Pop(&queue.PopItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1}, Quantity: 4}, reciverServerMock)
+
+	if string(reciverServerMock.Data[0]) != "payload1" {
+		t.Error("[0] should be payload1")
+	}
+
+	if string(reciverServerMock.Data[1]) != "payload2" {
+		t.Error("[1] should be payload2")
+	}
+
+	if string(reciverServerMock.Data[2]) != "payload3" {
+		t.Error("[2] should be payload3")
+	}
+
+	if string(reciverServerMock.Data[3]) != "payload4" {
+		t.Error("[3] should be payload4")
+	}
+
+}
+
+func BenchmarkPush(b *testing.B) {
+	dir, err := ioutil.TempDir("", "queuedata")
+	if err != nil {
+		b.Error(err)
+	}
+	defer os.RemoveAll(dir)
+
+	streamName := "test1"
+	partitions := 1
+	ctx := context.Background()
+	q := NewServer(dir)
+
+	q.CreateStream(ctx, &queue.CreateStreamRequest{Name: streamName, PartitionCount: int32(partitions)})
+
+	for i := 0; i < b.N; i++ {
+		q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
+			Item: &queue.Item{Payload: []byte("payload" + strconv.Itoa(i))}})
+	}
+}
 
 func TestFetch(t *testing.T) {
 
