@@ -29,10 +29,6 @@
 
 example: `2`
 
-**parition.info:**  File to store partition information that we can easly query later on. currently it holds the last logfile of this partition and the amount of entries inside of it. (useful for Push, when we want to check if we reached the maximun amount of entries per logfile)
-
-example: `1.log|2`
-
 **head.position:** file to store the state of the head position(soon to be consumed) of queue.Currently it stores the consumer_group(not used for anything yet), current logfile/byteoffset we are in. (useful for pop operation because we can know where we left off)
 
 example: `main|0.log|6`
@@ -44,4 +40,10 @@ TODO:
 * figure out how gestreams is supposed to work
 * figure out how and when to perform logfiles cleanup
 * figure out if we will support consummer_group id's
+
+
+Bugs:
+* change the values of dicardBufferSize,readBufferSize logfileSizeThreshold causes unexpected behavior
+
+
 

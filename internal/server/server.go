@@ -21,14 +21,14 @@ import (
 )
 
 const (
-	headerMessageLength = 4
-	dicardBufferSize    = 1024
-	readBufferSize      = 1024
-	logfileThreshold    = 1024
-	headPositionPaylod  = "{consume-group}|{logFile}|{byteoffset}"
-	headPositionPattern = `(\w+)\|(\d+\.log)\|(\d+)`
-	streamInfoPayload   = "{partitionCount}"
-	consumerGroup       = "main"
+	headerMessageLength  = 4
+	dicardBufferSize     = 1024 * 1024 //1 mb
+	readBufferSize       = 1024 * 1024 //1 mb
+	logfileSizeThreshold = 1024 * 1024 //1 mb
+	headPositionPaylod   = "{consume-group}|{logFile}|{byteoffset}"
+	headPositionPattern  = `(\w+)\|(\d+\.log)\|(\d+)`
+	streamInfoPayload    = "{partitionCount}"
+	consumerGroup        = "main"
 )
 
 type server struct {
@@ -100,7 +100,7 @@ func (s *server) LogFilesCount(streamName string, partition int) int {
 }
 func (s *server) candidateLogFile(streamName string, partition int, payloadSize int64) string {
 	lastLog := s.streamsMutex[streamName][partition].logs[len(s.streamsMutex[streamName][partition].logs)-1]
-	if payloadSize+lastLog.size > logfileThreshold {
+	if payloadSize+lastLog.size > logfileSizeThreshold {
 		s.createLogFile(streamName, partition)
 		newLogFile := s.streamsMutex[streamName][partition].logs[len(s.streamsMutex[streamName][partition].logs)-1]
 		newLogFile.size += payloadSize
@@ -288,6 +288,7 @@ func (s *server) Pop(request *queue.PopItemRequest, service queue.QueueService_P
 
 		if totalRead == int(request.Quantity) || err != io.EOF {
 			currentOffset = nextOffset
+			file.Close()
 			break
 		}
 
