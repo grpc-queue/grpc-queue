@@ -1,5 +1,5 @@
 test: #just in case we forget which action we want
-	go test ./... -v
+	go test ./... -v  -count=1
 
 rm-data: #we can quickly reset data for testing porpuses
 	rm -rf $(GRPCQUEUE_DATA_PATH)/queuedata

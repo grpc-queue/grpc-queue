@@ -21,16 +21,14 @@ import (
 )
 
 const (
-	headerMessageLength  = 4
-	maxEntriesPerLogFile = 2
-	dicardBufferSize     = 1024
-	readBufferSize       = 1024
-	headPositionPaylod   = "{consume-group}|{logFile}|{byteoffset}"
-	headPositionPattern  = `(\w+)\|(\d+\.log)\|(\d+)`
-	partitionInfoPayload = "{lastLog}|{entryCount}"
-	partitionInfoPattern = `(\d+\.log)\|(\d+)`
-	streamInfoPayload    = "{partitionCount}"
-	consumerGroup        = "main"
+	headerMessageLength = 4
+	dicardBufferSize    = 1024
+	readBufferSize      = 1024
+	logfileThreshold    = 1024
+	headPositionPaylod  = "{consume-group}|{logFile}|{byteoffset}"
+	headPositionPattern = `(\w+)\|(\d+\.log)\|(\d+)`
+	streamInfoPayload   = "{partitionCount}"
+	consumerGroup       = "main"
 )
 
 type server struct {
@@ -39,7 +37,11 @@ type server struct {
 	*queue.UnimplementedQueueServiceServer
 }
 
+type logfile struct {
+	size int64
+}
 type partition struct {
+	logs      []*logfile
 	pushMutex sync.Mutex
 	popMutex  sync.Mutex
 }
@@ -62,7 +64,6 @@ func NewServer(dataPath string) *server {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	s := &server{location: location}
 	streams := make(map[string][]partition)
 	for _, f := range files {
@@ -70,7 +71,13 @@ func NewServer(dataPath string) *server {
 			partitions := make([]partition, 0)
 			partitionsCount, _ := s.getStreamPartitionSize(f.Name())
 			for i := 0; i < partitionsCount; i++ {
-				partitions = append(partitions, partition{})
+				logsCount := s.LogFilesCount(f.Name(), i)
+				p := partition{logs: make([]*logfile, 0)}
+				for j := 0; j < logsCount; j++ {
+					l, _ := s.LogFileSize(f.Name(), i, j)
+					p.logs = append(p.logs, &logfile{size: l})
+				}
+				partitions = append(partitions, p)
 			}
 			streams[f.Name()] = partitions
 		}
@@ -79,18 +86,35 @@ func NewServer(dataPath string) *server {
 	return s
 
 }
-
-func (s *server) savePartitionInfo(streamName string, partition int, p *partitionInfo) {
-	file, err := os.OpenFile(s.location.StreamPartitionInfoFile(streamName, partition), os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0644)
+func (s *server) LogFileSize(streamName string, partition, log int) (int64, error) {
+	fi, err := os.Stat(s.location.StreamParttionLogEntryFile(streamName, strconv.Itoa(log)+".log", partition))
 	if err != nil {
-		log.Fatal(err)
+		return 0, err
 	}
-	defer file.Close()
-	payloadReplacer := strings.NewReplacer("{lastLog}", p.lastLog,
-		"{entryCount}", strconv.Itoa(p.EntryCount))
-	data := payloadReplacer.Replace(partitionInfoPayload)
-
-	file.Write([]byte(data))
+	size := fi.Size()
+	return size, nil
+}
+func (s *server) LogFilesCount(streamName string, partition int) int {
+	files, _ := ioutil.ReadDir(s.location.StreamPartitionFolder(streamName, partition))
+	return len(files) - 1 //1 to ignore head.position
+}
+func (s *server) candidateLogFile(streamName string, partition int, payloadSize int64) string {
+	lastLog := s.streamsMutex[streamName][partition].logs[len(s.streamsMutex[streamName][partition].logs)-1]
+	if payloadSize+lastLog.size > logfileThreshold {
+		s.createLogFile(streamName, partition)
+		newLogFile := s.streamsMutex[streamName][partition].logs[len(s.streamsMutex[streamName][partition].logs)-1]
+		newLogFile.size += payloadSize
+		return strconv.Itoa(len(s.streamsMutex[streamName][partition].logs)-1) + ".log"
+	}
+	lastLog.size += payloadSize
+	return strconv.Itoa(len(s.streamsMutex[streamName][partition].logs)-1) + ".log"
+}
+func (s *server) createLogFile(streamName string, partition int) string {
+	s.streamsMutex[streamName][partition].logs = append(s.streamsMutex[streamName][partition].logs, &logfile{})
+	logfile := strconv.Itoa(len(s.streamsMutex[streamName][partition].logs)-1) + ".log"
+	f, _ := os.Create(s.location.StreamParttionLogEntryFile(streamName, logfile, partition))
+	defer f.Close()
+	return logfile
 }
 
 func (s *server) getStreamPartitionSize(streamName string) (int, error) {
@@ -106,52 +130,21 @@ func (s *server) getStreamPartitionSize(streamName string) (int, error) {
 	return i, nil
 
 }
-func (s *server) getPartitionInfo(streamName string, partition int) *partitionInfo {
-	file, err := os.Open(s.location.StreamPartitionInfoFile(streamName, partition))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	re := regexp.MustCompile(partitionInfoPattern)
-	scanner.Scan()
-	groups := re.FindStringSubmatch(scanner.Text())
 
-	lastLog := groups[1]
-	entryCount, _ := strconv.Atoi(groups[2])
+func (s *server) writeEntry(streamName, logFile string, message []byte, partition int) {
 
-	return &partitionInfo{lastLog: lastLog, EntryCount: entryCount}
-
-}
-
-func (s *server) updatePartitionInfo(partition, amount int, streamName string) *partitionInfo {
-	p := s.getPartitionInfo(streamName, partition)
-	if p.EntryCount == maxEntriesPerLogFile {
-		i, _ := strconv.Atoi(strings.Split(p.lastLog, ".")[0])
-		i++
-		p.lastLog = strconv.Itoa(i) + ".log"
-		p.EntryCount = 0
-	} else {
-		p.EntryCount++
-	}
-	s.savePartitionInfo(streamName, partition, p)
-	return p
-}
-func (s *server) writeEntry(streamName string, message []byte, partition int, p *partitionInfo) {
-
-	location := s.location.StreamParttionLogEntryFile(streamName, p.lastLog, partition)
-	file, err := os.OpenFile(location, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	location := s.location.StreamParttionLogEntryFile(streamName, logFile, partition)
+	file, err := os.OpenFile(location, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Println(err)
 	}
 	defer file.Close()
 	var buffer bytes.Buffer
-	lengthMessage := len(message) + 1 //len of message plus \n
+	lengthMessage := len(message)
 	b := make([]byte, headerMessageLength)
 	binary.LittleEndian.PutUint32(b, uint32(lengthMessage))
 	buffer.Write(b)
 	buffer.Write(message)
-	buffer.WriteString("\n")
 	file.Write(buffer.Bytes())
 
 }
@@ -204,6 +197,7 @@ func (s *server) CreateStream(ctx context.Context, request *queue.CreateStreamRe
 	}
 
 	partitions := make([]partition, 0)
+	s.streamsMutex[request.Name] = partitions
 	for i := 0; i < int(request.PartitionCount); i++ {
 		l := s.location.StreamPartitionFolder(request.Name, i)
 		os.Mkdir(l, os.ModePerm)
@@ -217,15 +211,9 @@ func (s *server) CreateStream(ctx context.Context, request *queue.CreateStreamRe
 		if err != nil {
 			log.Fatalf("%s: %s", "Error saving StreamHeadPosition", err.Error())
 		}
-
-		partitions = append(partitions, partition{})
-
-		s.savePartitionInfo(request.Name, i, &partitionInfo{lastLog: "0.log", EntryCount: 0})
-
-		zeroLogFileLocation := s.location.StreamParttionLogEntryFile(request.Name, "0.log", i)
-		os.Create(zeroLogFileLocation)
+		s.streamsMutex[request.Name] = append(s.streamsMutex[request.Name], partition{logs: make([]*logfile, 0)})
+		s.createLogFile(request.Name, i)
 	}
-	s.streamsMutex[request.Name] = partitions
 
 	return &queue.CreateStreamResponse{}, nil
 }
@@ -255,16 +243,10 @@ func (s *server) Push(ctx context.Context, request *queue.PushItemRequest) (*que
 	partition.pushMutex.Lock()
 	defer partition.pushMutex.Unlock()
 
-	partitionCount, err := s.getStreamPartitionSize(request.Stream.Name)
-	if err != nil {
-		return nil, err
-	}
-	if int(request.Stream.Partition)-1 > partitionCount {
-		return nil, errors.New("invalid partition")
-	}
+	logFile := s.candidateLogFile(request.Stream.Name, partitionNumber, int64(len(request.Item.Payload)+5))
 
-	p := s.updatePartitionInfo(partitionNumber, 1, request.Stream.Name)
-	s.writeEntry(request.Stream.Name, request.Item.Payload, partitionNumber, p)
+	request.Item.Payload = append(request.Item.Payload, []byte("\n")...)
+	s.writeEntry(request.Stream.Name, logFile, request.Item.Payload, partitionNumber)
 
 	return &queue.PushItemResponse{}, nil
 }

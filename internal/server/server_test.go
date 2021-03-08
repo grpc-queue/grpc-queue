@@ -15,18 +15,18 @@ import (
 )
 
 type recieverServerMock struct {
-	Data [][]byte
+	Data []string
 	grpc.ServerStream
 }
 
-func newRecieverServerMock(data [][]byte) *recieverServerMock {
+func newRecieverServerMock(data []string) *recieverServerMock {
 	return &recieverServerMock{Data: data}
 }
 func (r *recieverServerMock) Send(item *queue.PopItemResponse) error {
-	r.Data = append(r.Data, item.GetItem().Payload)
+	r.Data = append(r.Data, string(item.GetItem().Payload))
 	return nil
 }
-func TestQueue(t *testing.T) {
+func TestQueue100k(t *testing.T) {
 	dir, err := ioutil.TempDir("", "queuedata")
 	if err != nil {
 		t.Error(err)
@@ -39,34 +39,26 @@ func TestQueue(t *testing.T) {
 	q := NewServer(dir)
 
 	q.CreateStream(ctx, &queue.CreateStreamRequest{Name: streamName, PartitionCount: int32(partitions)})
-	q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
-		Item: &queue.Item{Payload: []byte("payload1")}})
-	q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
-		Item: &queue.Item{Payload: []byte("payload2")}})
-	q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
-		Item: &queue.Item{Payload: []byte("payload3")}})
-	q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
-		Item: &queue.Item{Payload: []byte("payload4")}})
 
-	reciverServerMock := newRecieverServerMock(make([][]byte, 0))
-	q.Pop(&queue.PopItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1}, Quantity: 4}, reciverServerMock)
-
-	if string(reciverServerMock.Data[0]) != "payload1" {
-		t.Error("[0] should be payload1")
+	length := 100000
+	input := make([]string, 0)
+	for i := 0; i < length; i++ {
+		input = append(input, "payload"+strconv.Itoa(i))
 	}
 
-	if string(reciverServerMock.Data[1]) != "payload2" {
-		t.Error("[1] should be payload2")
+	for _, s := range input {
+		q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
+			Item: &queue.Item{Payload: []byte(s)}})
 	}
 
-	if string(reciverServerMock.Data[2]) != "payload3" {
-		t.Error("[2] should be payload3")
-	}
+	reciverServerMock := newRecieverServerMock(make([]string, 0))
+	q.Pop(&queue.PopItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1}, Quantity: int32(length)}, reciverServerMock)
 
-	if string(reciverServerMock.Data[3]) != "payload4" {
-		t.Error("[3] should be payload4")
+	for i, got := range reciverServerMock.Data {
+		if got != input[i] {
+			t.Errorf("[%v] got: %v want: %v", i, got, input[i])
+		}
 	}
-
 }
 
 func BenchmarkPush(b *testing.B) {
