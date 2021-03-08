@@ -10,7 +10,6 @@ const (
 	streamFolder               = "/queuedata/streams/{streamName}"
 	streamInfoFile             = "/queuedata/streams/{streamName}/stream.info"
 	streamPartitionFolder      = "/queuedata/streams/{streamName}/partition{partition}"
-	streamPartitionInfoFile    = "/queuedata/streams/{streamName}/partition{partition}/partition.info"
 	streamParttionLogEntryFile = "/queuedata/streams/{streamName}/partition{partition}/{logFile}"
 	streamHeadPositionFile     = "/queuedata/streams/{streamName}/partition{partition}/head.position"
 )
@@ -31,10 +30,6 @@ func buildPath(basePath, resource string, replacer *strings.Replacer) string {
 	return basePath + resource
 }
 
-func (l *Location) StreamPartitionInfoFile(streamName string, partition int) string {
-	replacer := strings.NewReplacer("{streamName}", streamName, "{partition}", strconv.Itoa(partition))
-	return buildPath(l.baseDataPath, streamPartitionInfoFile, replacer)
-}
 func (l *Location) StreamsFolder() string {
 	return buildPath(l.baseDataPath, streamsFolder, nil)
 }
