@@ -41,7 +41,7 @@ func TestQueue100k(t *testing.T) {
 	q.CreateStream(ctx, &queue.CreateStreamRequest{Name: streamName, PartitionCount: int32(partitions)})
 
 	length := 100000
-	input := make([]string, 0)
+	input := make([]string, 0, length)
 	for i := 0; i < length; i++ {
 		input = append(input, "payload"+strconv.Itoa(i))
 	}
@@ -51,7 +51,7 @@ func TestQueue100k(t *testing.T) {
 			Item: &queue.Item{Payload: []byte(s)}})
 	}
 
-	reciverServerMock := newRecieverServerMock(make([]string, 0))
+	reciverServerMock := newRecieverServerMock(make([]string, 0, length))
 	q.Pop(&queue.PopItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1}, Quantity: int32(length)}, reciverServerMock)
 
 	for i, got := range reciverServerMock.Data {
