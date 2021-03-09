@@ -6,22 +6,22 @@
         │   │   ├── 0.log
         │   │   ├── 1.log
         │   │   ├── head.position
-        │   │   └── partition.info
+        │   │   
         │   ├── partition1
         │   │   ├── head.position
-        │   │   └── partition.info
+        │   │   
         │   └── stream.info
         └── test2
             ├── partition0
             │   ├── head.position
-            │   └── partition.info
+            │   
             ├── partition1
             │   ├── 0.log
             │   ├── head.position
-            │   └── partition.info
+            │   
             ├── partition2
             │   ├── head.position
-            │   └── partition.info
+            │   
             └── stream.info
 ```
 
