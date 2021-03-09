@@ -55,9 +55,9 @@ func TestQueue100k(t *testing.T) {
 	reciverServerMock := newRecieverServerMock(make([]string, 0, length))
 	q.Pop(&queue.PopItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1}, Quantity: int32(length)}, reciverServerMock)
 
-	for i, got := range reciverServerMock.Data {
-		if got != input[i] {
-			t.Errorf("[%v] got: %v want: %v", i, got, input[i])
+	for i, want := range input {
+		if reciverServerMock.Data[i] != want {
+			t.Errorf("[%v] got: %v want: %v", i, reciverServerMock.Data[i], input[i])
 		}
 	}
 }
@@ -76,10 +76,39 @@ func BenchmarkPush(b *testing.B) {
 
 	q.CreateStream(ctx, &queue.CreateStreamRequest{Name: streamName, PartitionCount: int32(partitions)})
 
+	b.Run("Benchmark Push N", func(b *testing.B) {
+
+		for i := 0; i < b.N; i++ {
+			q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
+				Item: &queue.Item{Payload: []byte("payload" + strconv.Itoa(i))}})
+		}
+	})
+}
+
+func BenchmarkPop(b *testing.B) {
+	dir, err := ioutil.TempDir("", "queuedata")
+	if err != nil {
+		b.Error(err)
+	}
+	defer os.RemoveAll(dir)
+
+	streamName := "test1"
+	partitions := 1
+	ctx := context.Background()
+	q := NewServer(dir)
+
+	q.CreateStream(ctx, &queue.CreateStreamRequest{Name: streamName, PartitionCount: int32(partitions)})
+
 	for i := 0; i < b.N; i++ {
 		q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
 			Item: &queue.Item{Payload: []byte("payload" + strconv.Itoa(i))}})
 	}
+
+	b.Run("Benchmark Pop N", func(b *testing.B) {
+		reciverServerMock := newRecieverServerMock(make([]string, 0, b.N))
+		q.Pop(&queue.PopItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1}, Quantity: int32(b.N)}, reciverServerMock)
+	})
+
 }
 
 func TestAlternativeSeek(t *testing.T) {
