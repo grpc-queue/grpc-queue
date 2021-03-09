@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -81,6 +82,19 @@ func BenchmarkPush(b *testing.B) {
 	}
 }
 
+func TestAlternativeSeek(t *testing.T) {
+	t.Run("test1", func(t *testing.T) {
+		var buffer bytes.Buffer
+		buffer.WriteString("xxxxxxxxxxMetallica")
+		reader := bytes.NewBuffer(buffer.Bytes())
+		bufReader := bufio.NewReaderSize(reader, 1)
+		alternativeSeek(bufReader, 10)
+		bytes, _ := ioutil.ReadAll(bufReader)
+		if string(bytes) != "Metallica" {
+			t.Errorf("got %v want %v", string(bytes), "Metallica")
+		}
+	})
+}
 func TestFetch(t *testing.T) {
 
 	t.Run("2 queue items|10 byte offset| limit 1 |pop 1", func(t *testing.T) {
@@ -169,9 +183,10 @@ func TestFetch(t *testing.T) {
 		}
 		b := buffer.Bytes()
 		reader := bytes.NewReader(b)
+		bufReader := bufio.NewReaderSize(reader, 1)
 
 		wantNextOffset := int64(100)
-		gotNextOffset, err := fetch(50, 6, reader, callback)
+		gotNextOffset, err := fetch(50, 6, bufReader, callback)
 
 		if gotNextOffset != wantNextOffset {
 			t.Errorf("[nextOffset] got %v want %v ", gotNextOffset, wantNextOffset)
