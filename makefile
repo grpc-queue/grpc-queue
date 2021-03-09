@@ -1,6 +1,9 @@
 test: #just in case we forget which action we want
 	go test ./... -v  -count=1
 
+benchmark:
+	go test ./... -bench=.
+
 rm-data: #we can quickly reset data for testing porpuses
 	rm -rf $(GRPCQUEUE_DATA_PATH)/queuedata
 
