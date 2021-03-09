@@ -22,9 +22,9 @@ import (
 
 const (
 	headerMessageLength  = 4
-	dicardBufferSize     = 1024 * 1024 //1 mb
-	readBufferSize       = 1024 * 1024 //1 mb
-	logfileSizeThreshold = 1024 * 1024 //1 mb
+	dicardBufferSize     = 1024 * 1024 * 10  //~10mb
+	readBufferSize       = 1024 * 1024 * 10  //~10mb
+	logfileSizeThreshold = 1024 * 1024 * 512 //500mb
 	headPositionPaylod   = "{consume-group}|{logFile}|{byteoffset}"
 	headPositionPattern  = `(\w+)\|(\d+\.log)\|(\d+)`
 	streamInfoPayload    = "{partitionCount}"
@@ -235,7 +235,7 @@ func (s *server) GetStreams(ctx context.Context, request *queue.GetStreamsReques
 
 func (s *server) Push(ctx context.Context, request *queue.PushItemRequest) (*queue.PushItemResponse, error) {
 	partitionNumber := int(request.Stream.Partition) - 1
-
+	request.Item.Payload = append(request.Item.Payload, byte('\n'))
 	partition, err := s.retrievePartition(request.Stream.Name, partitionNumber)
 	if err != nil {
 		return nil, err
@@ -243,9 +243,8 @@ func (s *server) Push(ctx context.Context, request *queue.PushItemRequest) (*que
 	partition.pushMutex.Lock()
 	defer partition.pushMutex.Unlock()
 
-	logFile := s.candidateLogFile(request.Stream.Name, partitionNumber, int64(len(request.Item.Payload)+5))
+	logFile := s.candidateLogFile(request.Stream.Name, partitionNumber, int64(len(request.Item.Payload)+headerMessageLength))
 
-	request.Item.Payload = append(request.Item.Payload, []byte("\n")...)
 	s.writeEntry(request.Stream.Name, logFile, request.Item.Payload, partitionNumber)
 
 	return &queue.PushItemResponse{}, nil
@@ -330,19 +329,20 @@ func fetch(offset int64, limit int, reader io.Reader, callBack func([]byte)) (cu
 	currentPosition := offset
 	for i := 0; i < limit; i++ {
 		headerContentBuffer := make([]byte, headerMessageLength)
-		var currentReaded int
-		currentReaded, err := reader.Read(headerContentBuffer)
+
+		_, err := io.ReadFull(reader, headerContentBuffer)
 		if err != nil {
 			return currentPosition, err
 		}
 		sizePayloadBuf := int(binary.LittleEndian.Uint32(headerContentBuffer))
 		payloadBuffer := make([]byte, sizePayloadBuf)
-		n, err := reader.Read(payloadBuffer)
+		_, err = io.ReadFull(reader, payloadBuffer)
 		if err != nil {
 			return currentPosition, err
 		}
-		currentReaded += n
 		callBack(payloadBuffer)
+		currentReaded := headerMessageLength
+		currentReaded += sizePayloadBuf
 		currentPosition += int64(currentReaded)
 	}
 
@@ -362,27 +362,27 @@ func (s *server) retrievePartition(streamName string, partition int) (*partition
 
 //alternativeSeek because bufio does not implement seek
 func alternativeSeek(reader io.Reader, discard int64) error {
-	var counter int
+	var counter int64
 	for {
-		var bytes []byte
-		if (counter + dicardBufferSize) > int(discard) {
-			bytes = make([]byte, int(math.Abs(float64(counter)-float64(discard))))
-		} else if (counter + dicardBufferSize) == int(discard) {
-			bytes = make([]byte, dicardBufferSize)
+		// var bytes []byte
+		var i int64
+		if (counter + int64(dicardBufferSize)) > discard {
+			i = int64(math.Abs(float64(counter) - float64(discard)))
+		} else if (counter + dicardBufferSize) == discard {
+			i = dicardBufferSize
 		} else {
-			bytes = make([]byte, discard-int64(counter))
+			i = discard - int64(counter)
 		}
-
-		n, err := reader.Read(bytes)
+		n, err := io.CopyN(ioutil.Discard, reader, i)
 		if err != nil {
 			return err
 		}
 
 		counter += n
-		if counter > int(discard) {
+		if counter > discard {
 			return errors.New("should not be higher ")
 		}
-		if counter == int(discard) {
+		if counter == discard {
 			break
 		}
 	}
