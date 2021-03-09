@@ -28,38 +28,78 @@ func (r *recieverServerMock) Send(item *queue.PopItemResponse) error {
 	return nil
 }
 func TestQueue100k(t *testing.T) {
-	dir, err := ioutil.TempDir("", "queuedata")
-	if err != nil {
-		t.Error(err)
-	}
-	defer os.RemoveAll(dir)
 
-	streamName := "test1"
-	partitions := 1
-	ctx := context.Background()
-	q := NewServer(dir)
-
-	q.CreateStream(ctx, &queue.CreateStreamRequest{Name: streamName, PartitionCount: int32(partitions)})
-
-	length := 100000
-	input := make([]string, 0, length)
-	for i := 0; i < length; i++ {
-		input = append(input, "payload"+strconv.Itoa(i))
-	}
-
-	for _, s := range input {
-		q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
-			Item: &queue.Item{Payload: []byte(s)}})
-	}
-
-	reciverServerMock := newRecieverServerMock(make([]string, 0, length))
-	q.Pop(&queue.PopItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1}, Quantity: int32(length)}, reciverServerMock)
-
-	for i, want := range input {
-		if reciverServerMock.Data[i] != want {
-			t.Errorf("[%v] got: %v want: %v", i, reciverServerMock.Data[i], input[i])
+	t.Run("1 chunk", func(t *testing.T) {
+		dir, err := ioutil.TempDir("", "queuedata")
+		if err != nil {
+			t.Error(err)
 		}
-	}
+		defer os.RemoveAll(dir)
+
+		streamName := "test1"
+		partitions := 1
+		ctx := context.Background()
+		q := NewServer(dir)
+
+		q.CreateStream(ctx, &queue.CreateStreamRequest{Name: streamName, PartitionCount: int32(partitions)})
+
+		length := 100000
+		input := make([]string, 0, length)
+		for i := 0; i < length; i++ {
+			input = append(input, "payload"+strconv.Itoa(i))
+		}
+
+		for _, s := range input {
+			q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
+				Item: &queue.Item{Payload: []byte(s)}})
+		}
+
+		reciverServerMock := newRecieverServerMock(make([]string, 0, length))
+		q.Pop(&queue.PopItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1}, Quantity: int32(length)}, reciverServerMock)
+
+		for i, want := range input {
+			if reciverServerMock.Data[i] != want {
+				t.Errorf("[%v] got: %v want: %v", i, reciverServerMock.Data[i], input[i])
+			}
+		}
+	})
+
+	t.Run("2 chunks", func(t *testing.T) {
+		dir, err := ioutil.TempDir("", "queuedata")
+		if err != nil {
+			t.Error(err)
+		}
+		defer os.RemoveAll(dir)
+
+		streamName := "test1"
+		partitions := 1
+		ctx := context.Background()
+		q := NewServer(dir)
+
+		q.CreateStream(ctx, &queue.CreateStreamRequest{Name: streamName, PartitionCount: int32(partitions)})
+
+		length := 100000
+		input := make([]string, 0, length)
+		for i := 0; i < length; i++ {
+			input = append(input, "payload"+strconv.Itoa(i))
+		}
+
+		for _, s := range input {
+			q.Push(ctx, &queue.PushItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1},
+				Item: &queue.Item{Payload: []byte(s)}})
+		}
+
+		reciverServerMock := newRecieverServerMock(make([]string, 0, length))
+		q.Pop(&queue.PopItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1}, Quantity: 50000}, reciverServerMock)
+		q.Pop(&queue.PopItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1}, Quantity: 50000}, reciverServerMock)
+
+		for i, want := range input {
+			if reciverServerMock.Data[i] != want {
+				t.Errorf("[%v] got: %v want: %v", i, reciverServerMock.Data[i], input[i])
+			}
+		}
+	})
+
 }
 
 func BenchmarkPush(b *testing.B) {
@@ -104,7 +144,7 @@ func BenchmarkPop(b *testing.B) {
 			Item: &queue.Item{Payload: []byte("payload" + strconv.Itoa(i))}})
 	}
 
-	b.Run("Benchmark Pop N", func(b *testing.B) {
+	b.Run("Benchmark Pop 1 chank of N", func(b *testing.B) {
 		reciverServerMock := newRecieverServerMock(make([]string, 0, b.N))
 		q.Pop(&queue.PopItemRequest{Stream: &queue.Stream{Name: streamName, Partition: 1}, Quantity: int32(b.N)}, reciverServerMock)
 	})

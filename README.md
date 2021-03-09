@@ -42,8 +42,4 @@ TODO:
 * figure out if we will support consummer_group id's
 
 
-Bugs:
-* change the values of dicardBufferSize,readBufferSize logfileSizeThreshold causes unexpected behavior
-
-
 
